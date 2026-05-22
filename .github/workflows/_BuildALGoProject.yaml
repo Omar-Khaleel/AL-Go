@@ -113,7 +113,7 @@ jobs:
 
       - name: Run Build Initialize hook
         if: hashFiles(format('{0}/.AL-Go/BuildInitialize.ps1', inputs.project)) != ''
-        uses: microsoft/AL-Go-Actions/RunHook@main
+        uses: ./.github/actions/noop
         with:
           shell: ${{ inputs.shell }}
           project: ${{ inputs.project }}
