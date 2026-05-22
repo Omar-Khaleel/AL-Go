@@ -1,0 +1,13 @@
+{
+  "type": "PTE",
+  "templateUrl": "https://github.com/microsoft/AL-Go-PTE@main",
+  "environments": [
+    "Sandbox"
+  ],
+  "DeployToSandbox": {
+    "EnvironmentType": "Sandbox",
+    "EnvironmentName": "Sandbox",
+    "Scope": "Dev",
+    "continuousDeployment": true
+  }
+}
