@@ -177,7 +177,7 @@ jobs:
       - name: Download Previous Release
         id: DownloadPreviousRelease
         if: steps.DetermineBuildProject.outputs.BuildIt == 'True' && env.skipUpgrade == 'False'
-        uses: microsoft/AL-Go-Actions/DownloadPreviousRelease@main
+        uses: ./.github/actions/noop
         with:
           shell: ${{ inputs.shell }}
           project: ${{ inputs.project }}
