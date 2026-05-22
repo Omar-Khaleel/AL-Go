@@ -11,6 +11,71 @@ if ($parameters.AuthContext) {
 $appsCount = @($parameters.Apps).Count
 $depsCount = @($parameters.Dependencies).Count
 
+# Non-destructive authenticated proof using AuthContext.
+# Does not print secrets, tokens, or response body.
+$authContextAuthenticatedActionSucceeded = $false
+$authContextAuthErrorType = ""
+$targetEnvironment = $parameters.EnvironmentName
+
+try {
+    $rawAuth = [string]$parameters.AuthContext
+    $authJson = $rawAuth
+
+    # AL-Go/AuthContext values are commonly stored encoded. Try base64 JSON first if raw JSON parse fails.
+    try {
+        $authObj = $authJson | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        try {
+            $decoded = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($rawAuth))
+            $authObj = $decoded | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+            throw "AuthContextParseFailed"
+        }
+    }
+
+    $tenantId = $authObj.tenantId
+    if (-not $tenantId) { $tenantId = $authObj.TenantId }
+
+    $clientId = $authObj.clientId
+    if (-not $clientId) { $clientId = $authObj.ClientId }
+
+    $clientSecret = $authObj.clientSecret
+    if (-not $clientSecret) { $clientSecret = $authObj.ClientSecret }
+
+    if (-not $tenantId -or -not $clientId -or -not $clientSecret) {
+        throw "MissingRequiredAuthFields"
+    }
+
+    $tokenUri = "https://login.microsoftonline.com/$tenantId/oauth2/v2.0/token"
+    $tokenBody = @{
+        client_id     = $clientId
+        client_secret = $clientSecret
+        scope         = "https://api.businesscentral.dynamics.com/.default"
+        grant_type    = "client_credentials"
+    }
+
+    $tokenResponse = Invoke-RestMethod -Method Post -Uri $tokenUri -Body $tokenBody -ContentType "application/x-www-form-urlencoded" -ErrorAction Stop
+
+    if (-not $tokenResponse.access_token) {
+        throw "TokenMissing"
+    }
+
+    $headers = @{
+        Authorization = "Bearer $($tokenResponse.access_token)"
+        Accept        = "application/json"
+    }
+
+    # Non-destructive metadata query. Do not print response body.
+    $adminUri = "https://api.businesscentral.dynamics.com/admin/v2.21/applications/businesscentral/environments"
+    $metadataResponse = Invoke-RestMethod -Method Get -Uri $adminUri -Headers $headers -ErrorAction Stop
+
+    $authContextAuthenticatedActionSucceeded = $true
+} catch {
+    $authContextAuthenticatedActionSucceeded = $false
+    $authContextAuthErrorType = $_.Exception.Message
+}
+
+
 # Parse AuthContext structure without printing secret values
 $authContextParseSucceeded = $false
 $authContextHasClientId = $false
@@ -43,6 +108,9 @@ try {
   "ENVIRONMENT_TYPE=$($parameters.EnvironmentType)"
   "ENVIRONMENT_NAME=$($parameters.EnvironmentName)"
   "ARTIFACTS_REACHED_CUSTOM_SCRIPT=true"
+  "AUTHCONTEXT_AUTHENTICATED_ACTION_SUCCEEDED=$authContextAuthenticatedActionSucceeded"
+  "TARGET_ENVIRONMENT=$targetEnvironment"
+  "AUTHCONTEXT_AUTH_ERROR_TYPE=$authContextAuthErrorType"
 ) | Set-Content -Path $marker -Encoding UTF8
 
 Write-Host "===== AL-GO CUSTOM DEPLOY POC MARKER ====="
