@@ -1,0 +1,19 @@
+name: noop
+description: Local no-op action for PoC workflow compatibility
+inputs:
+  shell:
+    required: false
+    default: powershell
+  eventId:
+    required: false
+    default: ''
+  telemetryScopeJson:
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: No-op
+      shell: powershell
+      run: |
+        Write-Host "NOOP_RUNHOOK_REPLACEMENT=true"
