@@ -1,6 +1,9 @@
 {
   "type": "PTE",
   "templateUrl": "https://github.com/microsoft/AL-Go-PTE@main",
+  "appFolders": [
+    "app"
+  ],
   "environments": [
     "Sandbox"
   ],
@@ -8,6 +11,9 @@
     "EnvironmentType": "Sandbox",
     "EnvironmentName": "Sandbox",
     "Scope": "Dev",
-    "continuousDeployment": true
+    "continuousDeployment": true,
+    "runs-on": "windows-latest",
+    "shell": "powershell",
+    "DependencyInstallMode": "install"
   }
 }
