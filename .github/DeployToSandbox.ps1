@@ -11,10 +11,33 @@ if ($parameters.AuthContext) {
 $appsCount = @($parameters.Apps).Count
 $depsCount = @($parameters.Dependencies).Count
 
+# Parse AuthContext structure without printing secret values
+$authContextParseSucceeded = $false
+$authContextHasClientId = $false
+$authContextHasTenantId = $false
+$authContextHasSecretOrCertificate = $false
+
+try {
+    if ($parameters.AuthContext) {
+        $authObj = $parameters.AuthContext | ConvertFrom-Json -ErrorAction Stop
+        $authContextParseSucceeded = $true
+        $authContextHasClientId = [bool]($authObj.clientId -or $authObj.ClientId -or $authObj.clientID)
+        $authContextHasTenantId = [bool]($authObj.tenantId -or $authObj.TenantId -or $authObj.tenantID)
+        $authContextHasSecretOrCertificate = [bool]($authObj.clientSecret -or $authObj.ClientSecret -or $authObj.certificate -or $authObj.Certificate)
+    }
+} catch {
+    $authContextParseSucceeded = $false
+}
+
+
 @(
   "CUSTOM_DEPLOY_SCRIPT_EXECUTED=true"
   "AUTHCONTEXT_PRESENT=$authPresent"
   "AUTHCONTEXT_LENGTH_GT_ZERO=$authLengthGtZero"
+  "AUTHCONTEXT_JSON_PARSE_SUCCEEDED=$authContextParseSucceeded"
+  "AUTHCONTEXT_HAS_CLIENT_ID=$authContextHasClientId"
+  "AUTHCONTEXT_HAS_TENANT_ID=$authContextHasTenantId"
+  "AUTHCONTEXT_HAS_SECRET_OR_CERTIFICATE=$authContextHasSecretOrCertificate"
   "APPS_COUNT=$appsCount"
   "DEPENDENCIES_COUNT=$depsCount"
   "ENVIRONMENT_TYPE=$($parameters.EnvironmentType)"
