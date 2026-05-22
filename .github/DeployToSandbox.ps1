@@ -11,6 +11,30 @@ if ($parameters.AuthContext) {
 $appsCount = @($parameters.Apps).Count
 $depsCount = @($parameters.Dependencies).Count
 
+
+# Safe AuthContext introspection: prints type/property names only, never values.
+$authContextTypeName = "null"
+$authContextPropertyNames = ""
+$authContextStringLength = 0
+
+try {
+    if ($parameters.AuthContext) {
+        $authContextTypeName = $parameters.AuthContext.GetType().FullName
+        $authContextStringLength = ([string]$parameters.AuthContext).Length
+
+        try {
+            $authContextPropertyNames = (
+                $parameters.AuthContext.PSObject.Properties |
+                Select-Object -ExpandProperty Name
+            ) -join ","
+        } catch {
+            $authContextPropertyNames = "PROPERTY_ENUM_FAILED"
+        }
+    }
+} catch {
+    $authContextTypeName = "TYPE_INTROSPECTION_FAILED"
+}
+
 # Non-destructive authenticated proof using AuthContext.
 # Does not print secrets, tokens, or response body.
 $authContextAuthenticatedActionSucceeded = $false
@@ -99,6 +123,9 @@ try {
   "CUSTOM_DEPLOY_SCRIPT_EXECUTED=true"
   "AUTHCONTEXT_PRESENT=$authPresent"
   "AUTHCONTEXT_LENGTH_GT_ZERO=$authLengthGtZero"
+  "AUTHCONTEXT_TYPE_NAME=$authContextTypeName"
+  "AUTHCONTEXT_STRING_LENGTH=$authContextStringLength"
+  "AUTHCONTEXT_PROPERTY_NAMES=$authContextPropertyNames"
   "AUTHCONTEXT_JSON_PARSE_SUCCEEDED=$authContextParseSucceeded"
   "AUTHCONTEXT_HAS_CLIENT_ID=$authContextHasClientId"
   "AUTHCONTEXT_HAS_TENANT_ID=$authContextHasTenantId"
