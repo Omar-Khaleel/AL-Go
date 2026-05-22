@@ -4,6 +4,9 @@
   "appFolders": [
     "app"
   ],
+  "buildModes": [
+    "Default"
+  ],
   "environments": [
     "Sandbox"
   ],
@@ -12,6 +15,10 @@
     "EnvironmentName": "Sandbox",
     "Scope": "Dev",
     "continuousDeployment": true,
+    "Branches": [
+      "setup-algo-poc"
+    ],
+    "Projects": "*",
     "runs-on": "windows-latest",
     "shell": "powershell",
     "DependencyInstallMode": "install"
