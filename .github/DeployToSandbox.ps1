@@ -9,6 +9,64 @@ if ($parameters.AuthContext) {
 }
 
 $appsCount = @($parameters.Apps).Count
+
+# Non-destructive authenticated validation using AuthContext.
+# This only requests an access token and queries Business Central environment metadata.
+# It never prints secrets, tokens, or response bodies.
+$authContextAuthenticatedValidationSucceeded = $false
+$authContextValidationErrorType = ""
+$targetEnvironment = $parameters.EnvironmentName
+
+try {
+    $authObj = ([string]$parameters.AuthContext) | ConvertFrom-Json -ErrorAction Stop
+
+    $tenantId = $authObj.tenantId
+    if (-not $tenantId) { $tenantId = $authObj.TenantId }
+
+    $clientId = $authObj.clientId
+    if (-not $clientId) { $clientId = $authObj.ClientId }
+
+    $clientSecret = $authObj.clientSecret
+    if (-not $clientSecret) { $clientSecret = $authObj.ClientSecret }
+
+    if (-not $tenantId -or -not $clientId -or -not $clientSecret) {
+        throw "MissingRequiredAuthContextFields"
+    }
+
+    $tokenUri = "https://login.microsoftonline.com/$tenantId/oauth2/v2.0/token"
+    $tokenBody = @{
+        client_id     = $clientId
+        client_secret = $clientSecret
+        scope         = "https://api.businesscentral.dynamics.com/.default"
+        grant_type    = "client_credentials"
+    }
+
+    $tokenResponse = Invoke-RestMethod `
+        -Method Post `
+        -Uri $tokenUri `
+        -Body $tokenBody `
+        -ContentType "application/x-www-form-urlencoded" `
+        -ErrorAction Stop
+
+    if (-not $tokenResponse.access_token) {
+        throw "AccessTokenMissing"
+    }
+
+    $headers = @{
+        Authorization = "Bearer $($tokenResponse.access_token)"
+        Accept        = "application/json"
+    }
+
+    # Safe metadata query. Response body is intentionally not printed.
+    $adminUri = "https://api.businesscentral.dynamics.com/admin/v2.21/applications/businesscentral/environments"
+    $null = Invoke-RestMethod -Method Get -Uri $adminUri -Headers $headers -ErrorAction Stop
+
+    $authContextAuthenticatedValidationSucceeded = $true
+} catch {
+    $authContextAuthenticatedValidationSucceeded = $false
+    $authContextValidationErrorType = $_.Exception.Message
+}
+
 $depsCount = @($parameters.Dependencies).Count
 
 
@@ -135,6 +193,9 @@ try {
   "ENVIRONMENT_TYPE=$($parameters.EnvironmentType)"
   "ENVIRONMENT_NAME=$($parameters.EnvironmentName)"
   "ARTIFACTS_REACHED_CUSTOM_SCRIPT=true"
+  "AUTHCONTEXT_AUTHENTICATED_VALIDATION_SUCCEEDED=$authContextAuthenticatedValidationSucceeded"
+  "TARGET_ENVIRONMENT=$targetEnvironment"
+  "AUTHCONTEXT_VALIDATION_ERROR_TYPE=$authContextValidationErrorType"
   "AUTHCONTEXT_AUTHENTICATED_ACTION_SUCCEEDED=$authContextAuthenticatedActionSucceeded"
   "TARGET_ENVIRONMENT=$targetEnvironment"
   "AUTHCONTEXT_AUTH_ERROR_TYPE=$authContextAuthErrorType"
