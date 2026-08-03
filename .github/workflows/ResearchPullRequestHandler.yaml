@@ -17,7 +17,7 @@ defaults:
 permissions:
   actions: read
   contents: read
-  id-token: none
+  id-token: write
   pull-requests: read
   packages: read
 
