@@ -1,145 +1,106 @@
 param([hashtable] $parameters)
 
-$marker = Join-Path $env:GITHUB_WORKSPACE "algo-custom-deploy-marker.txt"
+Set-StrictMode -Version 2.0
+$ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
 
-$authPresent = [bool]$parameters.AuthContext
-$authLengthGtZero = $false
-if ($parameters.AuthContext) {
-    $authLengthGtZero = ($parameters.AuthContext.Length -gt 0)
+$marker = Join-Path $env:GITHUB_WORKSPACE "algo-boundary-v2-marker.txt"
+$scriptPath = $MyInvocation.MyCommand.Path
+$workflowPath = Join-Path $env:GITHUB_WORKSPACE ".github/workflows/CICD.yaml"
+
+function Get-SafeFileHash([string] $path) {
+    if ($path -and (Test-Path -LiteralPath $path)) {
+        return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    return "MISSING"
 }
 
-$appsCount = @($parameters.Apps).Count
+function Get-EnvValue([string] $name) {
+    $value = [Environment]::GetEnvironmentVariable($name)
+    if ($null -eq $value) { return "" }
+    return [string]$value
+}
 
-# Non-destructive authenticated validation using AuthContext.
-# This only requests an access token and queries Business Central environment metadata.
-# It never prints secrets, tokens, or response bodies.
-$authContextAuthenticatedValidationSucceeded = $false
-$authContextValidationErrorType = ""
-$targetEnvironment = $parameters.EnvironmentName
+function ConvertFrom-Base64Url([string] $value) {
+    $normalized = $value.Replace('-', '+').Replace('_', '/')
+    switch ($normalized.Length % 4) {
+        2 { $normalized += '==' }
+        3 { $normalized += '=' }
+    }
+    return [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($normalized))
+}
+
+$authPresent = [bool]$parameters.AuthContext
+$authParseSucceeded = $false
+$authHasClientId = $false
+$authHasTenantId = $false
+$authHasSecretOrCertificate = $false
+$tokenRequestSucceeded = $false
+$tokenAudience = ""
+$tokenHasApplicationIdentity = $false
+$tokenRoleCount = 0
+$adminQuerySucceeded = $false
+$adminEnvironmentCount = 0
+$targetEnvironmentFound = $false
+$targetEnvironmentStatus = ""
+$errorType = ""
 
 try {
-    $authObj = ([string]$parameters.AuthContext) | ConvertFrom-Json -ErrorAction Stop
-
-    $tenantId = $authObj.tenantId
-    if (-not $tenantId) { $tenantId = $authObj.TenantId }
-
-    $clientId = $authObj.clientId
-    if (-not $clientId) { $clientId = $authObj.ClientId }
-
-    $clientSecret = $authObj.clientSecret
-    if (-not $clientSecret) { $clientSecret = $authObj.ClientSecret }
-
-    if (-not $tenantId -or -not $clientId -or -not $clientSecret) {
-        throw "MissingRequiredAuthContextFields"
+    $rawAuth = [string]$parameters.AuthContext
+    try {
+        $authObj = $rawAuth | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        $decodedAuth = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($rawAuth))
+        $authObj = $decodedAuth | ConvertFrom-Json -ErrorAction Stop
     }
 
-    $tokenUri = "https://login.microsoftonline.com/$tenantId/oauth2/v2.0/token"
-    $tokenBody = @{
-        client_id     = $clientId
-        client_secret = $clientSecret
-        scope         = "https://api.businesscentral.dynamics.com/.default"
-        grant_type    = "client_credentials"
+    $authParseSucceeded = $true
+    $tenantId = $authObj.tenantId
+    if (-not $tenantId) { $tenantId = $authObj.TenantId }
+    $clientId = $authObj.clientId
+    if (-not $clientId) { $clientId = $authObj.ClientId }
+    $clientSecret = $authObj.clientSecret
+    if (-not $clientSecret) { $clientSecret = $authObj.ClientSecret }
+    $certificate = $authObj.certificate
+    if (-not $certificate) { $certificate = $authObj.Certificate }
+
+    $authHasClientId = [bool]$clientId
+    $authHasTenantId = [bool]$tenantId
+    $authHasSecretOrCertificate = [bool]($clientSecret -or $certificate)
+
+    if (-not $tenantId -or -not $clientId -or -not $clientSecret) {
+        throw "MissingRequiredClientCredentialFields"
     }
 
     $tokenResponse = Invoke-RestMethod `
         -Method Post `
-        -Uri $tokenUri `
-        -Body $tokenBody `
+        -Uri "https://login.microsoftonline.com/$tenantId/oauth2/v2.0/token" `
         -ContentType "application/x-www-form-urlencoded" `
+        -Body @{
+            client_id     = $clientId
+            client_secret = $clientSecret
+            scope         = "https://api.businesscentral.dynamics.com/.default"
+            grant_type    = "client_credentials"
+        } `
         -ErrorAction Stop
 
     if (-not $tokenResponse.access_token) {
         throw "AccessTokenMissing"
     }
+    $tokenRequestSucceeded = $true
 
-    $headers = @{
-        Authorization = "Bearer $($tokenResponse.access_token)"
-        Accept        = "application/json"
-    }
-
-    # Safe metadata query. Response body is intentionally not printed.
-    $adminUri = "https://api.businesscentral.dynamics.com/admin/v2.21/applications/businesscentral/environments"
-    $null = Invoke-RestMethod -Method Get -Uri $adminUri -Headers $headers -ErrorAction Stop
-
-    $authContextAuthenticatedValidationSucceeded = $true
-} catch {
-    $authContextAuthenticatedValidationSucceeded = $false
-    $authContextValidationErrorType = $_.Exception.Message
-}
-
-$depsCount = @($parameters.Dependencies).Count
-
-
-# Safe AuthContext introspection: prints type/property names only, never values.
-$authContextTypeName = "null"
-$authContextPropertyNames = ""
-$authContextStringLength = 0
-
-try {
-    if ($parameters.AuthContext) {
-        $authContextTypeName = $parameters.AuthContext.GetType().FullName
-        $authContextStringLength = ([string]$parameters.AuthContext).Length
-
-        try {
-            $authContextPropertyNames = (
-                $parameters.AuthContext.PSObject.Properties |
-                Select-Object -ExpandProperty Name
-            ) -join ","
-        } catch {
-            $authContextPropertyNames = "PROPERTY_ENUM_FAILED"
-        }
-    }
-} catch {
-    $authContextTypeName = "TYPE_INTROSPECTION_FAILED"
-}
-
-# Non-destructive authenticated proof using AuthContext.
-# Does not print secrets, tokens, or response body.
-$authContextAuthenticatedActionSucceeded = $false
-$authContextAuthErrorType = ""
-$targetEnvironment = $parameters.EnvironmentName
-
-try {
-    $rawAuth = [string]$parameters.AuthContext
-    $authJson = $rawAuth
-
-    # AL-Go/AuthContext values are commonly stored encoded. Try base64 JSON first if raw JSON parse fails.
     try {
-        $authObj = $authJson | ConvertFrom-Json -ErrorAction Stop
-    } catch {
-        try {
-            $decoded = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($rawAuth))
-            $authObj = $decoded | ConvertFrom-Json -ErrorAction Stop
-        } catch {
-            throw "AuthContextParseFailed"
+        $segments = ([string]$tokenResponse.access_token).Split('.')
+        if ($segments.Count -ge 2) {
+            $claims = (ConvertFrom-Base64Url $segments[1]) | ConvertFrom-Json -ErrorAction Stop
+            $tokenAudience = [string]$claims.aud
+            $tokenHasApplicationIdentity = [bool]($claims.appid -or $claims.azp)
+            $tokenRoleCount = @($claims.roles).Count
         }
     }
-
-    $tenantId = $authObj.tenantId
-    if (-not $tenantId) { $tenantId = $authObj.TenantId }
-
-    $clientId = $authObj.clientId
-    if (-not $clientId) { $clientId = $authObj.ClientId }
-
-    $clientSecret = $authObj.clientSecret
-    if (-not $clientSecret) { $clientSecret = $authObj.ClientSecret }
-
-    if (-not $tenantId -or -not $clientId -or -not $clientSecret) {
-        throw "MissingRequiredAuthFields"
-    }
-
-    $tokenUri = "https://login.microsoftonline.com/$tenantId/oauth2/v2.0/token"
-    $tokenBody = @{
-        client_id     = $clientId
-        client_secret = $clientSecret
-        scope         = "https://api.businesscentral.dynamics.com/.default"
-        grant_type    = "client_credentials"
-    }
-
-    $tokenResponse = Invoke-RestMethod -Method Post -Uri $tokenUri -Body $tokenBody -ContentType "application/x-www-form-urlencoded" -ErrorAction Stop
-
-    if (-not $tokenResponse.access_token) {
-        throw "TokenMissing"
+    catch {
+        # Claim decoding is supplemental and must not fail the authenticated proof.
     }
 
     $headers = @{
@@ -147,60 +108,78 @@ try {
         Accept        = "application/json"
     }
 
-    # Non-destructive metadata query. Do not print response body.
     $adminUri = "https://api.businesscentral.dynamics.com/admin/v2.21/applications/businesscentral/environments"
     $metadataResponse = Invoke-RestMethod -Method Get -Uri $adminUri -Headers $headers -ErrorAction Stop
+    $adminQuerySucceeded = $true
 
-    $authContextAuthenticatedActionSucceeded = $true
-} catch {
-    $authContextAuthenticatedActionSucceeded = $false
-    $authContextAuthErrorType = $_.Exception.Message
-}
-
-
-# Parse AuthContext structure without printing secret values
-$authContextParseSucceeded = $false
-$authContextHasClientId = $false
-$authContextHasTenantId = $false
-$authContextHasSecretOrCertificate = $false
-
-try {
-    if ($parameters.AuthContext) {
-        $authObj = $parameters.AuthContext | ConvertFrom-Json -ErrorAction Stop
-        $authContextParseSucceeded = $true
-        $authContextHasClientId = [bool]($authObj.clientId -or $authObj.ClientId -or $authObj.clientID)
-        $authContextHasTenantId = [bool]($authObj.tenantId -or $authObj.TenantId -or $authObj.tenantID)
-        $authContextHasSecretOrCertificate = [bool]($authObj.clientSecret -or $authObj.ClientSecret -or $authObj.certificate -or $authObj.Certificate)
+    $environmentItems = @()
+    if ($null -ne $metadataResponse.value) {
+        $environmentItems = @($metadataResponse.value)
     }
-} catch {
-    $authContextParseSucceeded = $false
+    else {
+        $environmentItems = @($metadataResponse)
+    }
+    $adminEnvironmentCount = $environmentItems.Count
+
+    $targetName = [string]$parameters.EnvironmentName
+    $target = $environmentItems | Where-Object {
+        ([string]$_.name -eq $targetName) -or
+        ([string]$_.environmentName -eq $targetName)
+    } | Select-Object -First 1
+
+    if ($target) {
+        $targetEnvironmentFound = $true
+        if ($null -ne $target.status) {
+            $targetEnvironmentStatus = [string]$target.status
+        }
+    }
+}
+catch {
+    $errorType = $_.Exception.GetType().FullName
 }
 
+$appsCount = @($parameters.Apps).Count
+$dependenciesCount = @($parameters.Dependencies).Count
 
 @(
-  "CUSTOM_DEPLOY_SCRIPT_EXECUTED=true"
-  "AUTHCONTEXT_PRESENT=$authPresent"
-  "AUTHCONTEXT_LENGTH_GT_ZERO=$authLengthGtZero"
-  "AUTHCONTEXT_TYPE_NAME=$authContextTypeName"
-  "AUTHCONTEXT_STRING_LENGTH=$authContextStringLength"
-  "AUTHCONTEXT_PROPERTY_NAMES=$authContextPropertyNames"
-  "AUTHCONTEXT_JSON_PARSE_SUCCEEDED=$authContextParseSucceeded"
-  "AUTHCONTEXT_HAS_CLIENT_ID=$authContextHasClientId"
-  "AUTHCONTEXT_HAS_TENANT_ID=$authContextHasTenantId"
-  "AUTHCONTEXT_HAS_SECRET_OR_CERTIFICATE=$authContextHasSecretOrCertificate"
-  "APPS_COUNT=$appsCount"
-  "DEPENDENCIES_COUNT=$depsCount"
-  "ENVIRONMENT_TYPE=$($parameters.EnvironmentType)"
-  "ENVIRONMENT_NAME=$($parameters.EnvironmentName)"
-  "ARTIFACTS_REACHED_CUSTOM_SCRIPT=true"
-  "AUTHCONTEXT_AUTHENTICATED_VALIDATION_SUCCEEDED=$authContextAuthenticatedValidationSucceeded"
-  "TARGET_ENVIRONMENT=$targetEnvironment"
-  "AUTHCONTEXT_VALIDATION_ERROR_TYPE=$authContextValidationErrorType"
-  "AUTHCONTEXT_AUTHENTICATED_ACTION_SUCCEEDED=$authContextAuthenticatedActionSucceeded"
-  "TARGET_ENVIRONMENT=$targetEnvironment"
-  "AUTHCONTEXT_AUTH_ERROR_TYPE=$authContextAuthErrorType"
-) | Set-Content -Path $marker -Encoding UTF8
+    "POC_VERSION=ALGO_BOUNDARY_V2"
+    "CUSTOM_DEPLOY_SCRIPT_EXECUTED=true"
+    "GITHUB_REPOSITORY=$(Get-EnvValue 'GITHUB_REPOSITORY')"
+    "GITHUB_ACTOR=$(Get-EnvValue 'GITHUB_ACTOR')"
+    "GITHUB_TRIGGERING_ACTOR=$(Get-EnvValue 'GITHUB_TRIGGERING_ACTOR')"
+    "GITHUB_EVENT_NAME=$(Get-EnvValue 'GITHUB_EVENT_NAME')"
+    "GITHUB_REF=$(Get-EnvValue 'GITHUB_REF')"
+    "GITHUB_REF_NAME=$(Get-EnvValue 'GITHUB_REF_NAME')"
+    "GITHUB_SHA=$(Get-EnvValue 'GITHUB_SHA')"
+    "GITHUB_WORKFLOW=$(Get-EnvValue 'GITHUB_WORKFLOW')"
+    "GITHUB_WORKFLOW_REF=$(Get-EnvValue 'GITHUB_WORKFLOW_REF')"
+    "GITHUB_WORKFLOW_SHA=$(Get-EnvValue 'GITHUB_WORKFLOW_SHA')"
+    "GITHUB_JOB=$(Get-EnvValue 'GITHUB_JOB')"
+    "GITHUB_RUN_ID=$(Get-EnvValue 'GITHUB_RUN_ID')"
+    "GITHUB_RUN_ATTEMPT=$(Get-EnvValue 'GITHUB_RUN_ATTEMPT')"
+    "CUSTOM_SCRIPT_SHA256=$(Get-SafeFileHash $scriptPath)"
+    "WORKFLOW_SHA256=$(Get-SafeFileHash $workflowPath)"
+    "AUTHCONTEXT_PRESENT=$authPresent"
+    "AUTHCONTEXT_JSON_PARSE_SUCCEEDED=$authParseSucceeded"
+    "AUTHCONTEXT_HAS_CLIENT_ID=$authHasClientId"
+    "AUTHCONTEXT_HAS_TENANT_ID=$authHasTenantId"
+    "AUTHCONTEXT_HAS_SECRET_OR_CERTIFICATE=$authHasSecretOrCertificate"
+    "ACCESS_TOKEN_REQUEST_SUCCEEDED=$tokenRequestSucceeded"
+    "ACCESS_TOKEN_AUDIENCE=$tokenAudience"
+    "ACCESS_TOKEN_HAS_APPLICATION_IDENTITY=$tokenHasApplicationIdentity"
+    "ACCESS_TOKEN_ROLE_COUNT=$tokenRoleCount"
+    "BUSINESS_CENTRAL_ADMIN_QUERY_SUCCEEDED=$adminQuerySucceeded"
+    "BUSINESS_CENTRAL_ENVIRONMENT_COUNT=$adminEnvironmentCount"
+    "TARGET_ENVIRONMENT_NAME=$($parameters.EnvironmentName)"
+    "TARGET_ENVIRONMENT_FOUND=$targetEnvironmentFound"
+    "TARGET_ENVIRONMENT_STATUS=$targetEnvironmentStatus"
+    "APPS_COUNT=$appsCount"
+    "DEPENDENCIES_COUNT=$dependenciesCount"
+    "ENVIRONMENT_TYPE=$($parameters.EnvironmentType)"
+    "ENVIRONMENT_NAME=$($parameters.EnvironmentName)"
+    "AUTHENTICATED_PROOF_ERROR_TYPE=$errorType"
+) | Set-Content -LiteralPath $marker -Encoding UTF8
 
-Write-Host "===== AL-GO CUSTOM DEPLOY POC MARKER ====="
-Get-Content $marker
-Write-Host "===== END MARKER ====="
+Write-Host "===== AL-GO TRUST BOUNDARY V2 MARKER ====="
+Get-Content -LiteralPath $marker
+Write-Host "===== END AL-GO TRUST BOUNDARY V2 MARKER ====="
