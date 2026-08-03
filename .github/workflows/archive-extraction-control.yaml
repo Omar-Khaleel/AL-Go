@@ -1,0 +1,157 @@
+name: Archive Extraction Boundary Control
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/algo-boundary-v2
+    paths:
+      - '.github/workflows/archive-extraction-control.yaml'
+      - 'SECURITY-RESEARCH/archive-control-trigger.txt'
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: powershell
+
+jobs:
+  archive-boundary-control:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout isolated research branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/algo-boundary-v2
+
+      - name: Test Expand-Archive containment
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+
+          $root = Join-Path $env:RUNNER_TEMP 'algo-archive-boundary-control'
+          if (Test-Path -LiteralPath $root) {
+            Remove-Item -LiteralPath $root -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $root | Out-Null
+
+          $moduleInfo = Get-Module -ListAvailable Microsoft.PowerShell.Archive |
+            Sort-Object Version -Descending |
+            Select-Object -First 1
+
+          $tests = @(
+            @{ Name = 'dotdot-backslash'; Entry = '..\outside-backslash.txt'; Outside = (Join-Path $root 'outside-backslash.txt') },
+            @{ Name = 'dotdot-forwardslash'; Entry = '../outside-forwardslash.txt'; Outside = (Join-Path $root 'outside-forwardslash.txt') },
+            @{ Name = 'prefix-sibling'; Entry = '..\destination-sibling\outside-prefix.txt'; Outside = (Join-Path $root 'destination-sibling\outside-prefix.txt') }
+          )
+
+          $results = @()
+          foreach ($test in $tests) {
+            $zipPath = Join-Path $root "$($test.Name).zip"
+            $destination = Join-Path $root "$($test.Name)-destination"
+            New-Item -ItemType Directory -Path $destination -Force | Out-Null
+
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $stream = [System.IO.File]::Open($zipPath, [System.IO.FileMode]::Create)
+            try {
+              $zip = [System.IO.Compression.ZipArchive]::new(
+                $stream,
+                [System.IO.Compression.ZipArchiveMode]::Create,
+                $false
+              )
+              try {
+                $entry = $zip.CreateEntry($test.Entry)
+                $writer = [System.IO.StreamWriter]::new($entry.Open())
+                try {
+                  $writer.Write('SAFE_ARCHIVE_BOUNDARY_MARKER')
+                }
+                finally {
+                  $writer.Dispose()
+                }
+
+                $safeEntry = $zip.CreateEntry('safe/inside.txt')
+                $safeWriter = [System.IO.StreamWriter]::new($safeEntry.Open())
+                try {
+                  $safeWriter.Write('SAFE_INSIDE_MARKER')
+                }
+                finally {
+                  $safeWriter.Dispose()
+                }
+              }
+              finally {
+                $zip.Dispose()
+              }
+            }
+            finally {
+              $stream.Dispose()
+            }
+
+            $expandSucceeded = $true
+            $expandErrorType = ''
+            $expandErrorMessage = ''
+            try {
+              Expand-Archive -LiteralPath $zipPath -DestinationPath $destination -Force -ErrorAction Stop
+            }
+            catch {
+              $expandSucceeded = $false
+              $expandErrorType = $_.Exception.GetType().FullName
+              $expandErrorMessage = ($_.Exception.Message -replace '[\r\n]+', ' ')
+            }
+
+            $outsideCreated = Test-Path -LiteralPath $test.Outside
+            $insideCreated = Test-Path -LiteralPath (Join-Path $destination 'safe\inside.txt')
+
+            $results += [pscustomobject]@{
+              Test = $test.Name
+              ArchiveEntry = $test.Entry
+              ExpandSucceeded = $expandSucceeded
+              OutsideCreated = $outsideCreated
+              SafeInsideCreated = $insideCreated
+              ErrorType = $expandErrorType
+              ErrorMessage = $expandErrorMessage
+            }
+          }
+
+          $resultPath = Join-Path $env:GITHUB_WORKSPACE 'SECURITY-RESEARCH/archive-extraction-control-result.md'
+          New-Item -ItemType Directory -Path (Split-Path $resultPath -Parent) -Force | Out-Null
+
+          @(
+            '# AL-Go archive extraction containment control'
+            ''
+            "- Timestamp (UTC): $([DateTime]::UtcNow.ToString('o'))"
+            "- Runner OS: $env:RUNNER_OS"
+            "- Runner image: $env:ImageOS"
+            "- PowerShell version: $($PSVersionTable.PSVersion)"
+            "- PowerShell edition: $($PSVersionTable.PSEdition)"
+            "- Microsoft.PowerShell.Archive version: $($moduleInfo.Version)"
+            "- Microsoft.PowerShell.Archive path: $($moduleInfo.Path)"
+            "- Workflow ref: $env:GITHUB_WORKFLOW_REF"
+            "- Commit SHA: $env:GITHUB_SHA"
+            ''
+            '| Test | Entry | Expand succeeded | Outside file created | Safe inside file created | Error type |'
+            '|---|---|---:|---:|---:|---|'
+          ) | Set-Content -LiteralPath $resultPath -Encoding UTF8
+
+          foreach ($result in $results) {
+            $entry = $result.ArchiveEntry.Replace('|', '\|')
+            $errorType = $result.ErrorType.Replace('|', '\|')
+            Add-Content -LiteralPath $resultPath -Encoding UTF8 -Value "| $($result.Test) | ``$entry`` | $($result.ExpandSucceeded) | $($result.OutsideCreated) | $($result.SafeInsideCreated) | ``$errorType`` |"
+          }
+
+          Add-Content -LiteralPath $resultPath -Encoding UTF8 -Value ''
+          Add-Content -LiteralPath $resultPath -Encoding UTF8 -Value 'A result of `Outside file created = False` means the tested archive entry did not escape the intended extraction directory.'
+
+          Get-Content -LiteralPath $resultPath
+
+      - name: Commit sanitized control result
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add SECURITY-RESEARCH/archive-extraction-control-result.md
+          if (git diff --cached --quiet) {
+            Write-Host 'No result change to commit.'
+            exit 0
+          }
+          git commit -m 'Record archive extraction boundary control result [skip ci]'
+          git push origin HEAD:feature/algo-boundary-v2
