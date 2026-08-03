@@ -19,7 +19,7 @@
     "Scope": "Dev",
     "continuousDeployment": true,
     "Branches": [
-      "setup-algo-poc"
+      "feature/algo-boundary-v2"
     ],
     "Projects": "*",
     "runs-on": "windows-latest",
