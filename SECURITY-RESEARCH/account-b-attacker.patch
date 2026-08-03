@@ -1,0 +1,45 @@
+diff --git a/app/app.json b/app/app.json
+index 67e174e..0000000 100644
+--- a/app/app.json
++++ b/app/app.json
+@@ -1,10 +1,10 @@
+ {
+-  "id": "11111111-1111-1111-1111-111111111111",
+-  "name": "ALGoPocApp",
+-  "publisher": "OmarPoc",
+-  "version": "1.0.0.0",
+-  "brief": "PoC app",
+-  "description": "Minimal AL-Go PoC app",
++  "id": "22222222-2222-4222-8222-222222222222",
++  "name": "ALGoAttackerProof",
++  "publisher": "ExternalAccountProof",
++  "version": "1.0.0.1",
++  "brief": "External fork protected-deployment proof",
++  "description": "External fork artifact used to test AL-Go protected custom deployment provenance",
+   "privacyStatement": "",
+   "EULA": "",
+   "help": "",
+diff --git a/app/Hello.al b/app/Hello.al
+index b517615..0000000 100644
+--- a/app/Hello.al
++++ b/app/Hello.al
+@@ -1,10 +1,10 @@
+-page 50100 "ALGo POC Page"
++page 50120 "ALGo Attacker Proof Page"
+ {
+     PageType = Card;
+     ApplicationArea = All;
+     UsageCategory = Administration;
+-    Caption = 'ALGo POC Page';
++    Caption = 'ALGo Attacker Proof Page';
+ 
+     layout
+     {
+@@ -25,6 +25,6 @@ page 50100 "ALGo POC Page"
+ 
+     trigger OnOpenPage()
+     begin
+-        MessageTxt := 'AL-Go PoC';
++        MessageTxt := 'External fork artifact reached protected deployment identity';
+     end;
+ }
