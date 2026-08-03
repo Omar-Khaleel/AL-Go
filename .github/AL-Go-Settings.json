@@ -1,6 +1,6 @@
 {
   "type": "PTE",
-  "templateUrl": "https://github.com/microsoft/AL-Go-PTE@main",
+  "templateUrl": "https://github.com/microsoft/AL-Go-PTE@v9.1",
   "projects": [
     "."
   ],
@@ -11,19 +11,19 @@
     "Default"
   ],
   "environments": [
-    "Sandbox"
+    "ProductionProof"
   ],
-  "DeployToSandbox": {
-    "EnvironmentType": "Sandbox",
+  "DeployToProductionProof": {
+    "EnvironmentType": "ProductionProof",
     "EnvironmentName": "Sandbox",
     "Scope": "Dev",
-    "continuousDeployment": true,
+    "continuousDeployment": false,
     "Branches": [
-      "feature/algo-boundary-v2"
+      "research/algo-two-account-pr-prod"
     ],
     "Projects": "*",
     "runs-on": "windows-latest",
     "shell": "powershell",
-    "DependencyInstallMode": "install"
+    "DependencyInstallMode": "ignore"
   }
 }
