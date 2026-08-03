@@ -1,0 +1,1 @@
+This harmless file exists only to validate the trusted PR artifact build workflow before the external-account experiment.
